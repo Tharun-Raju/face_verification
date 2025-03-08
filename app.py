@@ -46,8 +46,6 @@ st.markdown("<h1 style='text-align: center;'>Face Verification System</h1>", uns
 st.markdown("<p style='text-align: center;'>Capture a live image and verify it against stored images.</p>", unsafe_allow_html=True)
 
 # Initialize session state variables
-if 'preview_active' not in st.session_state:
-    st.session_state.preview_active = False
 if 'image_captured' not in st.session_state:
     st.session_state.image_captured = False
 if 'verification_attempts' not in st.session_state:
@@ -58,11 +56,6 @@ if 'captured_frame' not in st.session_state:
     st.session_state.captured_frame = None
 if 'verification_in_progress' not in st.session_state:
     st.session_state.verification_in_progress = False
-
-# Function to toggle camera state
-def toggle_camera():
-    st.session_state.preview_active = not st.session_state.preview_active
-    st.session_state.image_captured = False
 
 # Function to preprocess image to improve face detection
 def preprocess_image(image_path):
@@ -86,32 +79,6 @@ def preprocess_image(image_path):
     except Exception as e:
         st.error(f"Error preprocessing image: {e}")
         return False
-
-# Function to capture image with improved reliability
-def capture_image():
-    cap = cv2.VideoCapture(0)
-    
-    # Allow camera to warm up/stabilize
-    for _ in range(3):  # Reduced from 5 to 3 frames
-        cap.read()
-        time.sleep(0.05)  # Reduced from 0.1 to 0.05
-    
-    # Take just one good frame instead of multiple
-    ret, frame = cap.read()
-    cap.release()
-    
-    if ret:
-        st.session_state.captured_frame = frame
-        st.session_state.image_captured = True
-        st.session_state.preview_active = False
-        
-        # Save the captured image
-        cv2.imwrite("temp_live_capture.jpg", frame)
-        
-        # Preprocess the image to improve face detection
-        preprocess_image("temp_live_capture.jpg")
-    else:
-        st.error("Failed to capture image from camera!")
 
 # Function to reset verification
 def reset_verification():
@@ -194,65 +161,41 @@ if applicant_name:
     else:
         st.success(f"Folder found: {APPLICANT_FOLDER}")
 
-        # Camera placeholder for live feed
+        # Camera placeholder for displaying the captured image
         camera_placeholder = st.empty()
         status_placeholder = st.empty()
         
-        # Create camera control buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            if not st.session_state.preview_active and not st.session_state.image_captured:
-                start_camera = st.button("Start Camera", on_click=toggle_camera)
-            elif st.session_state.preview_active:
-                stop_camera = st.button("Stop Camera", on_click=toggle_camera)
-        
-        with col2:
-            if st.session_state.preview_active:
-                capture_btn = st.button("Capture Image", on_click=capture_image)
-        
-        # Handle live camera feed
-        if st.session_state.preview_active:
-            cap = cv2.VideoCapture(0)
+        # Display instructions
+        if not st.session_state.image_captured:
+            st.info("Position your face clearly in the center of the frame and take a photo.")
             
-            # Check if camera opened successfully
-            if not cap.isOpened():
-                st.error("Error: Could not open camera.")
-                st.session_state.preview_active = False
-            else:
-                # Add camera instructions
-                st.info("Position your face clearly in the center of the frame.")
+            # Use Streamlit's native camera input
+            camera_image = st.camera_input("Take a photo")
+            
+            if camera_image:
+                # Process the captured image
+                bytes_data = camera_image.getvalue()
+                img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
                 
-                # Create a frame to display the live feed
-                while st.session_state.preview_active:
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Failed to get frame from camera.")
-                        break
-                    
-                    # Convert color from BGR to RGB (what Streamlit expects)
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Draw face detection guide overlay
-                    height, width = frame.shape[:2]
-                    center_x, center_y = width // 2, height // 2
-                    radius = min(width, height) // 4
-                    cv2.circle(frame_rgb, (center_x, center_y), radius, (0, 255, 0), 2)
-                    
-                    camera_placeholder.image(frame_rgb, caption="Live Camera Feed", use_container_width=True)
-                    
-                    # Add a small delay to not overload the UI
-                    time.sleep(0.1)
-                    
-                    # Check if any interactions happened
-                    if not st.session_state.preview_active:
-                        break
+                # Save the image
+                cv2.imwrite("temp_live_capture.jpg", img)
                 
-                cap.release()
+                # Preprocess the image to improve face detection
+                preprocess_image("temp_live_capture.jpg")
+                
+                # Update session state
+                st.session_state.captured_frame = img
+                st.session_state.image_captured = True
+                
+                # Force rerun to update the UI
+                st.rerun()
         
         # Display captured image
-        if st.session_state.image_captured and st.session_state.captured_frame is not None:
-            captured_rgb = cv2.cvtColor(st.session_state.captured_frame, cv2.COLOR_BGR2RGB)
-            camera_placeholder.image(captured_rgb, caption="Captured Image", use_container_width=True)
+        if st.session_state.image_captured and os.path.exists("temp_live_capture.jpg"):
+            captured_img = cv2.imread("temp_live_capture.jpg")
+            if captured_img is not None:
+                captured_rgb = cv2.cvtColor(captured_img, cv2.COLOR_BGR2RGB)
+                camera_placeholder.image(captured_rgb, caption="Captured Image", use_container_width=True)
             
             # Verification process
             if st.session_state.verification_attempts < 3 and not st.session_state.verified and not st.session_state.verification_in_progress:
@@ -284,7 +227,6 @@ if applicant_name:
                             
                             if st.button("Retake Image"):
                                 st.session_state.image_captured = False
-                                st.session_state.preview_active = True
                                 st.session_state.verification_in_progress = False
                                 st.rerun()
                         else:
