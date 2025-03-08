@@ -2,5 +2,4 @@ streamlit
 opencv-python-headless
 numpy
 deepface
-tensorflow
-keras
+tensorflow==2.14.0
