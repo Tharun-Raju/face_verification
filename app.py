@@ -1,17 +1,16 @@
 import os
 import cv2
-import os
-import cv2
 import streamlit as st
 import numpy as np
 from deepface import DeepFace
 from datetime import datetime
 import time
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 
 # Streamlit UI Setup
 st.set_page_config(page_title="Face Verification System", layout="centered")
 
-# Dark Mode Styling (keeping your existing styling)
+# Dark Mode Styling (keep your original styling)
 st.markdown(
     """
     <style>
@@ -45,11 +44,9 @@ st.markdown(
 )
 
 st.markdown("<h1 style='text-align: center;'>Face Verification System</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>Upload an image or capture one to verify against stored images.</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Capture a live image and verify it against stored images.</p>", unsafe_allow_html=True)
 
 # Initialize session state variables
-if 'preview_active' not in st.session_state:
-    st.session_state.preview_active = False
 if 'image_captured' not in st.session_state:
     st.session_state.image_captured = False
 if 'verification_attempts' not in st.session_state:
@@ -60,15 +57,48 @@ if 'captured_frame' not in st.session_state:
     st.session_state.captured_frame = None
 if 'verification_in_progress' not in st.session_state:
     st.session_state.verification_in_progress = False
-if 'input_method' not in st.session_state:
-    st.session_state.input_method = "upload"  # Default to upload to work on Streamlit Cloud
 
-# Function to toggle camera state
-def toggle_camera():
-    st.session_state.preview_active = not st.session_state.preview_active
-    st.session_state.image_captured = False
+# RTC Configuration for WebRTC (handles connecting through firewalls)
+rtc_config = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
-# Function to preprocess image to improve face detection
+# Video Transformer for WebRTC
+class VideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.frame = None
+        
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        
+        # Draw face detection guide overlay
+        height, width = img.shape[:2]
+        center_x, center_y = width // 2, height // 2
+        radius = min(width, height) // 4
+        cv2.circle(img, (center_x, center_y), radius, (0, 255, 0), 2)
+        
+        # Store the current frame for capture
+        self.frame = img.copy()
+        return img
+
+# Capture frame from WebRTC streamer
+def capture_webrtc_frame():
+    if webrtc_ctx.video_transformer and webrtc_ctx.video_transformer.frame is not None:
+        frame = webrtc_ctx.video_transformer.frame
+        st.session_state.captured_frame = frame
+        st.session_state.image_captured = True
+        
+        # Save the captured image
+        cv2.imwrite("temp_live_capture.jpg", frame)
+        
+        # Preprocess the image to improve face detection
+        preprocess_image("temp_live_capture.jpg")
+        return True
+    else:
+        st.error("No frame available to capture. Make sure your camera is active.")
+        return False
+
+# Function to preprocess image to improve face detection (same as original)
 def preprocess_image(image_path):
     try:
         img = cv2.imread(image_path)
@@ -91,66 +121,7 @@ def preprocess_image(image_path):
         st.error(f"Error preprocessing image: {e}")
         return False
 
-# Function to capture image with improved reliability
-def capture_image():
-    try:
-        cap = cv2.VideoCapture(0)
-        
-        if not cap.isOpened():
-            st.error("Error: Could not open camera. Try using the upload option instead.")
-            st.session_state.input_method = "upload"
-            return
-            
-        # Allow camera to warm up/stabilize
-        for _ in range(3):
-            cap.read()
-            time.sleep(0.05)
-        
-        # Take just one good frame
-        ret, frame = cap.read()
-        cap.release()
-        
-        if ret:
-            st.session_state.captured_frame = frame
-            st.session_state.image_captured = True
-            st.session_state.preview_active = False
-            
-            # Save the captured image
-            cv2.imwrite("temp_live_capture.jpg", frame)
-            
-            # Preprocess the image to improve face detection
-            preprocess_image("temp_live_capture.jpg")
-        else:
-            st.error("Failed to capture image from camera. Try using the upload option.")
-            st.session_state.input_method = "upload"
-    except Exception as e:
-        st.error(f"Camera error: {e}. Try using the upload option.")
-        st.session_state.input_method = "upload"
-
-# Function to handle uploaded image
-def process_uploaded_image(uploaded_file):
-    try:
-        # Save the uploaded file
-        with open("temp_live_capture.jpg", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-            
-        # Read the image using OpenCV
-        image = cv2.imread("temp_live_capture.jpg")
-        if image is None:
-            st.error("Failed to process the uploaded image.")
-            return False
-            
-        st.session_state.captured_frame = image
-        st.session_state.image_captured = True
-        
-        # Preprocess the image
-        preprocess_image("temp_live_capture.jpg")
-        return True
-    except Exception as e:
-        st.error(f"Error processing uploaded image: {e}")
-        return False
-
-# Function to reset verification
+# Function to reset verification (same as original)
 def reset_verification():
     st.session_state.verification_attempts = 0
     st.session_state.image_captured = False
@@ -160,7 +131,7 @@ def reset_verification():
     if os.path.exists("temp_live_capture.jpg"):
         os.remove("temp_live_capture.jpg")
 
-# Function to verify face with optimized performance
+# Function to verify face with optimized performance (same as original)
 def verify_face(image_path, applicant_folder):
     # Use only the most reliable backends and models to improve speed
     backends = ['retinaface', 'opencv']  # Limited to just 2 backends
@@ -231,93 +202,32 @@ if applicant_name:
     else:
         st.success(f"Folder found: {APPLICANT_FOLDER}")
 
-        # Input method selection
-        st.caption("Choose input method:")
-        input_tabs = st.tabs(["Upload Image", "Use Camera"])
+        # WebRTC streamer component (replaces cv2.VideoCapture)
+        st.info("Position your face clearly in the center of the frame.")
+        webrtc_ctx = webrtc_streamer(
+            key="face-verification",
+            video_transformer_factory=VideoTransformer,
+            rtc_configuration=rtc_config,
+            media_stream_constraints={"video": True, "audio": False},
+        )
         
-        with input_tabs[0]:
-            if st.session_state.input_method == "upload" and not st.session_state.image_captured:
-                uploaded_file = st.file_uploader("Upload a face image:", type=["jpg", "jpeg", "png"])
-                if uploaded_file is not None:
-                    if process_uploaded_image(uploaded_file):
-                        st.session_state.input_method = "upload"
-                        st.rerun()
+        # Capture button (only works when WebRTC is active)
+        if webrtc_ctx.state.playing:
+            if st.button("Capture Image"):
+                if capture_webrtc_frame():
+                    # Force rerun to update the UI with the captured image
+                    st.experimental_rerun()
         
-        with input_tabs[1]:
-            # Show warning about Streamlit Cloud
-            st.info("Note: Camera might not work on Streamlit Cloud. If you encounter errors, use the Upload option.")
-            
-            # Camera placeholder for live feed
-            camera_placeholder = st.empty()
-            
-            # Create camera control buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                if not st.session_state.preview_active and not st.session_state.image_captured and st.session_state.input_method == "camera":
-                    start_camera = st.button("Start Camera", on_click=toggle_camera)
-                elif st.session_state.preview_active:
-                    stop_camera = st.button("Stop Camera", on_click=toggle_camera)
-            
-            with col2:
-                if st.session_state.preview_active:
-                    capture_btn = st.button("Capture Image", on_click=capture_image)
-            
-            # Handle live camera feed
-            if st.session_state.preview_active:
-                try:
-                    cap = cv2.VideoCapture(0)
-                    
-                    # Check if camera opened successfully
-                    if not cap.isOpened():
-                        st.error("Error: Could not open camera. Please try the upload option.")
-                        st.session_state.preview_active = False
-                        st.session_state.input_method = "upload"
-                    else:
-                        # Add camera instructions
-                        st.info("Position your face clearly in the center of the frame.")
-                        
-                        # Create a frame to display the live feed
-                        frame_count = 0
-                        while st.session_state.preview_active and frame_count < 30:  # Limit frames to avoid hanging
-                            ret, frame = cap.read()
-                            if not ret:
-                                st.error("Failed to get frame from camera.")
-                                break
-                            
-                            # Convert color from BGR to RGB (what Streamlit expects)
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            
-                            # Draw face detection guide overlay
-                            height, width = frame.shape[:2]
-                            center_x, center_y = width // 2, height // 2
-                            radius = min(width, height) // 4
-                            cv2.circle(frame_rgb, (center_x, center_y), radius, (0, 255, 0), 2)
-                            
-                            camera_placeholder.image(frame_rgb, caption="Live Camera Feed", use_container_width=True)
-                            
-                            frame_count += 1
-                            # Add a small delay to not overload the UI
-                            time.sleep(0.1)
-                            
-                            # Check if any interactions happened
-                            if not st.session_state.preview_active:
-                                break
-                    
-                    cap.release()
-                except Exception as e:
-                    st.error(f"Camera error: {e}. Please use the upload option.")
-                    st.session_state.preview_active = False
-                    st.session_state.input_method = "upload"
-        
-        # Status placeholder for verification messages
+        # Camera/Image placeholder
+        camera_placeholder = st.empty()
         status_placeholder = st.empty()
-                
+        
         # Display captured image
         if st.session_state.image_captured and st.session_state.captured_frame is not None:
             captured_rgb = cv2.cvtColor(st.session_state.captured_frame, cv2.COLOR_BGR2RGB)
-            st.image(captured_rgb, caption="Captured Image", use_container_width=True)
+            camera_placeholder.image(captured_rgb, caption="Captured Image", use_container_width=True)
             
-            # Verification process
+            # Verification process (same as original)
             if st.session_state.verification_attempts < 3 and not st.session_state.verified and not st.session_state.verification_in_progress:
                 image_path = "temp_live_capture.jpg"
                 st.session_state.verification_in_progress = True
@@ -345,27 +255,16 @@ if applicant_name:
                             else:
                                 status_placeholder.warning(f"⚠️ {message} You have {3 - st.session_state.verification_attempts} attempts left.")
                             
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if st.button("Try Again with Upload"):
-                                    st.session_state.image_captured = False
-                                    st.session_state.input_method = "upload"
-                                    st.session_state.verification_in_progress = False
-                                    st.rerun()
-                            with col2:
-                                if st.button("Try Again with Camera"):
-                                    st.session_state.image_captured = False
-                                    st.session_state.input_method = "camera"
-                                    st.session_state.preview_active = True
-                                    st.session_state.verification_in_progress = False
-                                    st.rerun()
+                            if st.button("Retake Image"):
+                                st.session_state.image_captured = False
+                                st.session_state.verification_in_progress = False
+                                st.experimental_rerun()
                         else:
                             # Changed this section to display the failure message
                             status_placeholder.error("❌ Face verification failed, you cannot proceed.")
                             if st.button("Start Over with New User"):
                                 reset_verification()
-                                st.experimental_set_query_params()
-                                st.rerun()
+                                st.experimental_rerun()
                 
                 st.session_state.verification_in_progress = False
             elif st.session_state.verification_attempts >= 3:
@@ -373,8 +272,7 @@ if applicant_name:
                 status_placeholder.error("❌ Face verification failed, you cannot proceed.")
                 if st.button("Start Over with New User"):
                     reset_verification()
-                    st.experimental_set_query_params()
-                    st.rerun()
+                    st.experimental_rerun()
 
         # Remove the captured image if it exists
         if os.path.exists("temp_live_capture.jpg") and st.session_state.verification_attempts >= 3:
