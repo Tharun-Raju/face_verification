@@ -5,18 +5,49 @@ import numpy as np
 from deepface import DeepFace
 from datetime import datetime
 import time
-from PIL import Image
-import io
 
 # Streamlit UI Setup
 st.set_page_config(page_title="Face Verification System", layout="centered")
 
-# Keep your dark mode styling as is
+# Dark Mode Styling
+st.markdown(
+    """
+    <style>
+        body {
+            background-color: #0e1117;
+            color: white;
+            font-family: 'Arial', sans-serif;
+        }
+        .stTextInput>div>div>input {
+            background-color: #1e1e1e;
+            color: white;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .stButton>button {
+            background-color: #1f77b4;
+            color: white;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        .stButton>button:hover {
+            background-color: #125f88;
+        }
+        .stImage {
+            border-radius: 10px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown("<h1 style='text-align: center;'>Face Verification System</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center;'>Capture a live image and verify it against stored images.</p>", unsafe_allow_html=True)
 
 # Initialize session state variables
+if 'image_captured' not in st.session_state:
+    st.session_state.image_captured = False
 if 'verification_attempts' not in st.session_state:
     st.session_state.verification_attempts = 0
 if 'verified' not in st.session_state:
@@ -24,7 +55,7 @@ if 'verified' not in st.session_state:
 if 'verification_in_progress' not in st.session_state:
     st.session_state.verification_in_progress = False
 
-# Function to preprocess image (keeping your original function)
+# Function to preprocess image to improve face detection
 def preprocess_image(image_path):
     try:
         img = cv2.imread(image_path)
@@ -50,17 +81,17 @@ def preprocess_image(image_path):
 # Function to reset verification
 def reset_verification():
     st.session_state.verification_attempts = 0
+    st.session_state.image_captured = False
     st.session_state.verified = False
     st.session_state.verification_in_progress = False
     if os.path.exists("temp_live_capture.jpg"):
         os.remove("temp_live_capture.jpg")
 
-# Function to verify face (keeping your original function)
+# Function to verify face with optimized performance
 def verify_face(image_path, applicant_folder):
-    # Keeping your original verification function
-    # ... (your existing verify_face function code)
-    backends = ['retinaface', 'opencv']
-    models = ['Facenet512']
+    # Use only the most reliable backends and models to improve speed
+    backends = ['retinaface', 'opencv']  # Limited to just 2 backends
+    models = ['Facenet512']  # Using just the best model for speed
     
     # First check if a face is detectable
     face_detected = False
@@ -79,7 +110,7 @@ def verify_face(image_path, applicant_folder):
     if not face_detected:
         return False, "No face detected. Please try again with better lighting."
     
-    # Rest of your verification function...
+    # Proceed with verification if face was detected
     best_distance = 1.0
     verification_success = False
     
@@ -107,7 +138,7 @@ def verify_face(image_path, applicant_folder):
                 if result["verified"] and result["distance"] < best_distance:
                     best_distance = result["distance"]
                     
-                if best_distance < 0.55:  # Back to original threshold
+                if best_distance < 0.55:  # Original threshold
                     verification_success = True
                     break
                     
@@ -127,41 +158,46 @@ if applicant_name:
     else:
         st.success(f"Folder found: {APPLICANT_FOLDER}")
 
-        # Create a status placeholder
+        # Status placeholder for messages
         status_placeholder = st.empty()
         
-        # Use Streamlit's built-in camera input
-        img_file_buffer = st.camera_input("Take a picture for verification", 
-                                         key="camera",
-                                         disabled=st.session_state.verification_attempts >= 3 or st.session_state.verified,
-                                         help="Position your face clearly in the center of the frame.")
+        # Using Streamlit's built-in camera input
+        if not st.session_state.image_captured:
+            st.info("Position your face clearly in the center of the frame.")
+            camera_input = st.camera_input("Take a picture for verification", key="camera")
+            
+            if camera_input is not None:
+                # Save the captured image
+                with open("temp_live_capture.jpg", "wb") as f:
+                    f.write(camera_input.getbuffer())
+                
+                # Preprocess the image to improve face detection
+                if preprocess_image("temp_live_capture.jpg"):
+                    st.session_state.image_captured = True
+                    st.rerun()  # Rerun to update the UI
         
-        # Process the captured image
-        if img_file_buffer is not None:
-            # Convert the image buffer to an OpenCV-compatible format
-            bytes_data = img_file_buffer.getvalue()
+        # Verification process
+        if st.session_state.image_captured and not st.session_state.verification_in_progress:
+            st.image("temp_live_capture.jpg", caption="Captured Image", use_container_width=True)
             
-            # Save the captured image to a file
-            with open("temp_live_capture.jpg", "wb") as file:
-                file.write(bytes_data)
-            
-            # Preprocess the image to improve face detection
-            preprocess_image("temp_live_capture.jpg")
-            
-            # Verification process
-            if st.session_state.verification_attempts < 3 and not st.session_state.verified and not st.session_state.verification_in_progress:
+            if st.session_state.verification_attempts < 3 and not st.session_state.verified:
+                image_path = "temp_live_capture.jpg"
                 st.session_state.verification_in_progress = True
                 
+                # Use the global spinner with a maximum wait time
                 with st.spinner("Verifying face..."):
+                    # Create a background message for longer verifications
                     status_msg = status_placeholder.info("Comparing with stored images...")
                     
-                    verification_success, message = verify_face("temp_live_capture.jpg", APPLICANT_FOLDER)
+                    verification_success, message = verify_face(image_path, APPLICANT_FOLDER)
                     
+                    # Clear the status message
                     status_placeholder.empty()
                     
                     if verification_success:
                         st.session_state.verified = True
                         status_placeholder.success(f"✅ Face Verified! Welcome, {applicant_name}.")
+                        # Display the interview prompt
                         st.success("You can move to the interview next.")
                     else:
                         st.session_state.verification_attempts += 1
@@ -171,27 +207,27 @@ if applicant_name:
                             else:
                                 status_placeholder.warning(f"⚠️ {message} You have {3 - st.session_state.verification_attempts} attempts left.")
                             
-                            # Clear the camera input to allow retaking
-                            st.session_state.pop("camera")
-                            st.session_state.verification_in_progress = False
-                            st.experimental_rerun()
+                            if st.button("Retake Image"):
+                                st.session_state.image_captured = False
+                                st.session_state.verification_in_progress = False
+                                st.rerun()
                         else:
+                            # Display the failure message
                             status_placeholder.error("❌ Face verification failed, you cannot proceed.")
                             if st.button("Start Over with New User"):
                                 reset_verification()
-                                st.session_state.pop("camera", None)
-                                st.experimental_rerun()
+                                st.experimental_set_query_params()
+                                st.rerun()
                 
                 st.session_state.verification_in_progress = False
-            
-            # For users who have exhausted their attempts
             elif st.session_state.verification_attempts >= 3:
+                # This section is for failed verification
                 status_placeholder.error("❌ Face verification failed, you cannot proceed.")
                 if st.button("Start Over with New User"):
                     reset_verification()
-                    st.session_state.pop("camera", None)
-                    st.experimental_rerun()
+                    st.experimental_set_query_params()
+                    st.rerun()
 
-        # Remove the captured image if it exists and we're done
+        # Remove the captured image if it exists
         if os.path.exists("temp_live_capture.jpg") and st.session_state.verification_attempts >= 3:
             os.remove("temp_live_capture.jpg")
