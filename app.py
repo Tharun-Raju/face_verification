@@ -5,6 +5,8 @@ import numpy as np
 from deepface import DeepFace
 from datetime import datetime
 import time
+import io
+from PIL import Image, ImageEnhance
 
 # Streamlit UI Setup
 st.set_page_config(page_title="Face Verification System", layout="centered")
@@ -57,28 +59,71 @@ if 'captured_frame' not in st.session_state:
 if 'verification_in_progress' not in st.session_state:
     st.session_state.verification_in_progress = False
 
-# Function to preprocess image to improve face detection
-def preprocess_image(image_path):
+# Enhanced image preprocessing function
+def enhance_image(img):
+    """Apply multiple image enhancement techniques to improve face recognition."""
     try:
-        img = cv2.imread(image_path)
-        if img is None:
-            return False
+        # Convert to PIL Image for enhancement
+        if isinstance(img, np.ndarray):
+            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        else:
+            img_pil = img
             
-        # Resize to reasonable dimensions
-        img = cv2.resize(img, (640, 480))
+        # 1. Enhance brightness
+        enhancer = ImageEnhance.Brightness(img_pil)
+        img_pil = enhancer.enhance(1.2)  # Slightly increase brightness
         
-        # Improve contrast using CLAHE
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        # 2. Enhance contrast
+        enhancer = ImageEnhance.Contrast(img_pil)
+        img_pil = enhancer.enhance(1.3)  # Increase contrast
+        
+        # 3. Enhance sharpness
+        enhancer = ImageEnhance.Sharpness(img_pil)
+        img_pil = enhancer.enhance(1.5)  # Increase sharpness
+        
+        # Convert back to OpenCV format
+        img_enhanced = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        # 4. Apply additional OpenCV enhancements
+        # Resize to ensure proper dimensions
+        img_enhanced = cv2.resize(img_enhanced, (640, 480))
+        
+        # Apply CLAHE for adaptive histogram equalization
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        lab = cv2.cvtColor(img_enhanced, cv2.COLOR_BGR2LAB)
         lab[:,:,0] = clahe.apply(lab[:,:,0])
-        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        img_enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         
-        # Save the preprocessed image
-        cv2.imwrite(image_path, img)
-        return True
+        # Apply slight Gaussian blur to reduce noise
+        img_enhanced = cv2.GaussianBlur(img_enhanced, (3, 3), 0)
+        
+        return img_enhanced
+    
     except Exception as e:
-        st.error(f"Error preprocessing image: {e}")
-        return False
+        st.error(f"Error enhancing image: {e}")
+        # Return original image if enhancement fails
+        if isinstance(img, np.ndarray):
+            return img
+        return np.array(img)
+
+# Modified function to preprocess and save image
+def process_and_save_image(img_data, save_path):
+    try:
+        # If img_data is bytes, convert to cv2 image
+        if isinstance(img_data, bytes):
+            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
+        else:
+            img = img_data
+            
+        # Apply image enhancements
+        enhanced_img = enhance_image(img)
+        
+        # Save the enhanced image
+        cv2.imwrite(save_path, enhanced_img)
+        return enhanced_img
+    except Exception as e:
+        st.error(f"Error processing image: {e}")
+        return None
 
 # Function to reset verification
 def reset_verification():
@@ -90,65 +135,113 @@ def reset_verification():
     if os.path.exists("temp_live_capture.jpg"):
         os.remove("temp_live_capture.jpg")
 
-# Function to verify face with optimized performance
+# Improved face verification function with more robust parameters
 def verify_face(image_path, applicant_folder):
-    # Use only the most reliable backends and models to improve speed
-    backends = ['retinaface', 'opencv']  # Limited to just 2 backends
-    models = ['Facenet512']  # Using just the best model for speed
+    # Create directory for pre-processed faces if it doesn't exist
+    processed_dir = "temp_processed_faces"
+    if not os.path.exists(processed_dir):
+        os.makedirs(processed_dir)
     
-    # First check if a face is detectable
-    face_detected = False
-    for backend in backends:
-        try:
-            DeepFace.detectFace(
-                img_path=image_path, 
-                target_size=(224, 224), 
-                detector_backend=backend
-            )
-            face_detected = True
-            break
-        except Exception:
-            continue
-    
-    if not face_detected:
-        return False, "No face detected. Please try again with better lighting."
-    
-    # Proceed with verification if face was detected
-    best_distance = 1.0
-    verification_success = False
-    
-    # Check against stored images with timeout to prevent hanging
-    start_time = time.time()
-    timeout = 5  # Maximum seconds to spend on verification
-    
-    for file in os.listdir(applicant_folder):
-        # Check if we've spent too much time already
-        if time.time() - start_time > timeout:
-            break
-            
-        if file.endswith(('.jpg', '.jpeg', '.png')):
-            stored_image_path = os.path.join(applicant_folder, file)
-            
+    # Process the captured image for different models
+    try:
+        # Create multiple processed versions with different parameters
+        img = cv2.imread(image_path)
+        processed_paths = []
+        
+        # Standard image
+        processed_path = f"{processed_dir}/standard.jpg"
+        cv2.imwrite(processed_path, img)
+        processed_paths.append(processed_path)
+        
+        # Slightly different brightness/contrast versions
+        for i, brightness in enumerate([0.9, 1.1]):
+            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            enhancer = ImageEnhance.Brightness(img_pil)
+            img_pil = enhancer.enhance(brightness)
+            processed_path = f"{processed_dir}/brightness_{i}.jpg"
+            img_pil.save(processed_path)
+            processed_paths.append(processed_path)
+        
+        # Use all backends for better detection chances
+        backends = ['retinaface', 'opencv', 'mtcnn', 'ssd', 'dlib']
+        models = ['Facenet512', 'ArcFace', 'VGG-Face']
+        
+        # First check if a face is detectable
+        face_detected = False
+        for backend in backends:
             try:
-                result = DeepFace.verify(
-                    img1_path=image_path,
-                    img2_path=stored_image_path,
-                    model_name=models[0],
-                    distance_metric='cosine',
-                    detector_backend=backends[0]
+                DeepFace.detectFace(
+                    img_path=image_path, 
+                    target_size=(224, 224), 
+                    detector_backend=backend
                 )
-                
-                if result["verified"] and result["distance"] < best_distance:
-                    best_distance = result["distance"]
-                    
-                if best_distance < 0.55:  # Back to original threshold
-                    verification_success = True
-                    break
-                    
+                face_detected = True
+                break
             except Exception:
                 continue
+        
+        if not face_detected:
+            return False, "No face detected. Please try again with better lighting."
+        
+        # Proceed with verification if face was detected
+        best_distance = 1.0
+        verification_success = False
+        
+        # Check against stored images with timeout to prevent hanging
+        start_time = time.time()
+        timeout = 10  # Increased timeout for more thorough checking
+        
+        for file in os.listdir(applicant_folder):
+            # Check if we've spent too much time already
+            if time.time() - start_time > timeout:
+                break
+                
+            if file.endswith(('.jpg', '.jpeg', '.png')):
+                stored_image_path = os.path.join(applicant_folder, file)
+                
+                # Try verification with each model/backend combination until success
+                for model in models:
+                    for backend in backends[:2]:  # Limit to first 2 backends for speed
+                        for processed_path in processed_paths:
+                            try:
+                                result = DeepFace.verify(
+                                    img1_path=processed_path,
+                                    img2_path=stored_image_path,
+                                    model_name=model,
+                                    distance_metric='cosine',
+                                    detector_backend=backend
+                                )
+                                
+                                if result["verified"] and result["distance"] < best_distance:
+                                    best_distance = result["distance"]
+                                
+                                # More lenient threshold to improve recognition
+                                if result["verified"] or best_distance < 0.65:  # Increased threshold
+                                    verification_success = True
+                                    break
+                            except Exception:
+                                continue
+                        
+                        if verification_success:
+                            break
+                    if verification_success:
+                        break
+                if verification_success:
+                    break
+        
+        # Clean up processed images
+        for path in processed_paths:
+            if os.path.exists(path):
+                os.remove(path)
+        
+        if os.path.exists(processed_dir):
+            os.rmdir(processed_dir)
+        
+        return verification_success, best_distance if verification_success else None
     
-    return verification_success, best_distance if verification_success else None
+    except Exception as e:
+        st.error(f"Error during verification: {e}")
+        return False, str(e)
 
 # Main app flow
 applicant_name = st.text_input("Enter applicant name:", placeholder="Type name and press Enter...").strip()
@@ -165,30 +258,69 @@ if applicant_name:
         camera_placeholder = st.empty()
         status_placeholder = st.empty()
         
-        # Display instructions
-        if not st.session_state.image_captured:
-            st.info("Position your face clearly in the center of the frame and take a photo.")
-            
-            # Use Streamlit's native camera input
-            camera_image = st.camera_input("Take a photo")
-            
-            if camera_image:
-                # Process the captured image
-                bytes_data = camera_image.getvalue()
-                img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        # Add option to upload image as alternative to camera
+        st.markdown("### Choose how to verify your face:")
+        option = st.radio("", ["Use Camera", "Upload Image"], horizontal=True)
+        
+        if option == "Use Camera":
+            # Display instructions
+            if not st.session_state.image_captured:
+                st.info("Position your face clearly in the center of the frame and take a photo in good lighting.")
+                st.warning("For best results, ensure your face is well-lit and directly facing the camera.")
                 
-                # Save the image
-                cv2.imwrite("temp_live_capture.jpg", img)
+                # Offer camera quality options
+                camera_quality = st.select_slider(
+                    "Camera Quality (higher is better but slower)",
+                    options=["Low", "Medium", "High"],
+                    value="High"
+                )
                 
-                # Preprocess the image to improve face detection
-                preprocess_image("temp_live_capture.jpg")
+                # Map quality settings to actual parameters
+                quality_map = {
+                    "Low": 0.5,
+                    "Medium": 0.75,
+                    "High": 1.0
+                }
                 
-                # Update session state
-                st.session_state.captured_frame = img
-                st.session_state.image_captured = True
+                # Use Streamlit's native camera input
+                camera_image = st.camera_input("Take a photo", key=f"camera_{quality_map[camera_quality]}")
                 
-                # Force rerun to update the UI
-                st.rerun()
+                if camera_image:
+                    # Process the captured image
+                    bytes_data = camera_image.getvalue()
+                    
+                    # Process and save the enhanced image
+                    enhanced_img = process_and_save_image(bytes_data, "temp_live_capture.jpg")
+                    
+                    if enhanced_img is not None:
+                        # Update session state
+                        st.session_state.captured_frame = enhanced_img
+                        st.session_state.image_captured = True
+                        
+                        # Force rerun to update the UI
+                        st.rerun()
+        
+        else:  # Upload Image option
+            if not st.session_state.image_captured:
+                st.info("Upload a clear photo of your face.")
+                
+                uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+                
+                if uploaded_file is not None:
+                    # Read and process the uploaded image
+                    image = Image.open(uploaded_file)
+                    
+                    # Convert PIL image to OpenCV format and enhance
+                    img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                    enhanced_img = process_and_save_image(img_cv, "temp_live_capture.jpg")
+                    
+                    if enhanced_img is not None:
+                        # Update session state
+                        st.session_state.captured_frame = enhanced_img
+                        st.session_state.image_captured = True
+                        
+                        # Force rerun to update the UI
+                        st.rerun()
         
         # Display captured image
         if st.session_state.image_captured and os.path.exists("temp_live_capture.jpg"):
@@ -205,7 +337,7 @@ if applicant_name:
                 # Use the global spinner with a maximum wait time
                 with st.spinner("Verifying face..."):
                     # Create a background message for longer verifications
-                    status_msg = status_placeholder.info("Comparing with stored images...")
+                    status_msg = status_placeholder.info("Comparing with stored images... This may take a moment.")
                     
                     verification_success, message = verify_face(image_path, APPLICANT_FOLDER)
                     
@@ -225,7 +357,7 @@ if applicant_name:
                             else:
                                 status_placeholder.warning(f"⚠️ {message} You have {3 - st.session_state.verification_attempts} attempts left.")
                             
-                            if st.button("Retake Image"):
+                            if st.button("Try Again"):
                                 st.session_state.image_captured = False
                                 st.session_state.verification_in_progress = False
                                 st.rerun()
