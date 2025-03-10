@@ -17,7 +17,6 @@ git clone https://github.com/your-username/face_verification.git
 cd face_verification
 pip install -r requirements.txt
 streamlit run app.py
-```
 face_verification/
 │
 ├── APPLICANT_PROFILE/    # Stored images of applicants
